@@ -116,11 +116,15 @@ typedef enum
   GST_POLL_MODE_WINDOWS
 } GstPollMode;
 
+#define GST_POLL_GET_LOCK(set) (&(((GstPoll *)set)->lock))
+#define GST_POLL_LOCK(set)     (g_mutex_lock (GST_POLL_GET_LOCK (set)))
+#define GST_POLL_UNLOCK(set)   (g_mutex_unlock (GST_POLL_GET_LOCK (set)))
+
 struct _GstPoll
 {
   GstPollMode mode;
 
-  GMutex *lock;
+  GMutex lock;
   /* array of fds, always written to and read from with lock */
   GArray *fds;
   /* array of active fds, only written to from the waiting thread with the
@@ -269,20 +273,20 @@ selectable_fds (const GstPoll * set)
 {
   guint i;
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
   for (i = 0; i < set->fds->len; i++) {
     struct pollfd *pfd = &g_array_index (set->fds, struct pollfd, i);
 
     if (pfd->fd >= FD_SETSIZE)
       goto too_many;
   }
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return TRUE;
 
 too_many:
   {
-    g_mutex_unlock (set->lock);
+    GST_POLL_UNLOCK (set);
     return FALSE;
   }
 }
@@ -345,7 +349,7 @@ pollfd_to_fd_set (GstPoll * set, fd_set * readfds, fd_set * writefds,
   FD_ZERO (writefds);
   FD_ZERO (errorfds);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   for (i = 0; i < set->active_fds->len; i++) {
     struct pollfd *pfd = &g_array_index (set->fds, struct pollfd, i);
@@ -362,7 +366,7 @@ pollfd_to_fd_set (GstPoll * set, fd_set * readfds, fd_set * writefds,
     }
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return max_fd;
 }
@@ -373,7 +377,7 @@ fd_set_to_pollfd (GstPoll * set, fd_set * readfds, fd_set * writefds,
 {
   guint i;
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   for (i = 0; i < set->active_fds->len; i++) {
     struct pollfd *pfd = &g_array_index (set->active_fds, struct pollfd, i);
@@ -389,7 +393,7 @@ fd_set_to_pollfd (GstPoll * set, fd_set * readfds, fd_set * writefds,
     }
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 }
 #else /* G_OS_WIN32 */
 /*
@@ -552,7 +556,7 @@ gst_poll_new (gboolean controllable)
   GST_DEBUG ("controllable : %d", controllable);
 
   nset = g_slice_new0 (GstPoll);
-  nset->lock = g_mutex_new ();
+  g_mutex_init (&nset->lock);
 #ifndef G_OS_WIN32
   nset->mode = GST_POLL_MODE_AUTO;
   nset->fds = g_array_new (FALSE, FALSE, sizeof (struct pollfd));
@@ -672,7 +676,7 @@ gst_poll_free (GstPoll * set)
 
   g_array_free (set->active_fds, TRUE);
   g_array_free (set->fds, TRUE);
-  g_mutex_free (set->lock);
+  g_mutex_clear (&set->lock);
   g_slice_free (GstPoll, set);
 }
 
@@ -785,11 +789,11 @@ gst_poll_add_fd (GstPoll * set, GstPollFD * fd)
   g_return_val_if_fail (fd != NULL, FALSE);
   g_return_val_if_fail (fd->fd >= 0, FALSE);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   ret = gst_poll_add_fd_unlocked (set, fd);
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return ret;
 }
@@ -817,7 +821,7 @@ gst_poll_remove_fd (GstPoll * set, GstPollFD * fd)
 
   GST_DEBUG ("%p: fd (fd:%d, idx:%d)", set, fd->fd, fd->idx);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   /* get the index, -1 is an fd that is not added */
   idx = find_index (set->fds, fd);
@@ -838,7 +842,7 @@ gst_poll_remove_fd (GstPoll * set, GstPollFD * fd)
     GST_WARNING ("%p: couldn't find fd !", set);
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return idx >= 0;
 }
@@ -868,7 +872,7 @@ gst_poll_fd_ctl_write (GstPoll * set, GstPollFD * fd, gboolean active)
   GST_DEBUG ("%p: fd (fd:%d, idx:%d), active : %d", set,
       fd->fd, fd->idx, active);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   idx = find_index (set->fds, fd);
   if (idx >= 0) {
@@ -890,7 +894,7 @@ gst_poll_fd_ctl_write (GstPoll * set, GstPollFD * fd, gboolean active)
     GST_WARNING ("%p: couldn't find fd !", set);
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return idx >= 0;
 }
@@ -946,11 +950,11 @@ gst_poll_fd_ctl_read (GstPoll * set, GstPollFD * fd, gboolean active)
   g_return_val_if_fail (fd != NULL, FALSE);
   g_return_val_if_fail (fd->fd >= 0, FALSE);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   ret = gst_poll_fd_ctl_read_unlocked (set, fd, active);
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return ret;
 }
@@ -981,7 +985,7 @@ gst_poll_fd_ignored (GstPoll * set, GstPollFD * fd)
   g_return_if_fail (fd != NULL);
   g_return_if_fail (fd->fd >= 0);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   idx = find_index (set->fds, fd);
   if (idx >= 0) {
@@ -991,7 +995,7 @@ gst_poll_fd_ignored (GstPoll * set, GstPollFD * fd)
     MARK_REBUILD (set);
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 #endif
 }
 
@@ -1018,7 +1022,7 @@ gst_poll_fd_has_closed (const GstPoll * set, GstPollFD * fd)
 
   GST_DEBUG ("%p: fd (fd:%d, idx:%d)", set, fd->fd, fd->idx);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   idx = find_index (set->active_fds, fd);
   if (idx >= 0) {
@@ -1035,7 +1039,7 @@ gst_poll_fd_has_closed (const GstPoll * set, GstPollFD * fd)
     GST_WARNING ("%p: couldn't find fd !", set);
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return res;
 }
@@ -1063,7 +1067,7 @@ gst_poll_fd_has_error (const GstPoll * set, GstPollFD * fd)
 
   GST_DEBUG ("%p: fd (fd:%d, idx:%d)", set, fd->fd, fd->idx);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   idx = find_index (set->active_fds, fd);
   if (idx >= 0) {
@@ -1084,7 +1088,7 @@ gst_poll_fd_has_error (const GstPoll * set, GstPollFD * fd)
     GST_WARNING ("%p: couldn't find fd !", set);
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return res;
 }
@@ -1135,11 +1139,11 @@ gst_poll_fd_can_read (const GstPoll * set, GstPollFD * fd)
   g_return_val_if_fail (fd != NULL, FALSE);
   g_return_val_if_fail (fd->fd >= 0, FALSE);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   res = gst_poll_fd_can_read_unlocked (set, fd);
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return res;
 }
@@ -1167,7 +1171,7 @@ gst_poll_fd_can_write (const GstPoll * set, GstPollFD * fd)
 
   GST_DEBUG ("%p: fd (fd:%d, idx:%d)", set, fd->fd, fd->idx);
 
-  g_mutex_lock (set->lock);
+  GST_POLL_LOCK (set);
 
   idx = find_index (set->active_fds, fd);
   if (idx >= 0) {
@@ -1184,7 +1188,7 @@ gst_poll_fd_can_write (const GstPoll * set, GstPollFD * fd)
     GST_WARNING ("%p: couldn't find fd !", set);
   }
 
-  g_mutex_unlock (set->lock);
+  GST_POLL_UNLOCK (set);
 
   return res;
 }
@@ -1245,7 +1249,7 @@ gst_poll_wait (GstPoll * set, GstClockTime timeout)
     mode = choose_mode (set, timeout);
 
     if (TEST_REBUILD (set)) {
-      g_mutex_lock (set->lock);
+      GST_POLL_LOCK (set);
 #ifndef G_OS_WIN32
       g_array_set_size (set->active_fds, set->fds->len);
       memcpy (set->active_fds->data, set->fds->data,
@@ -1254,7 +1258,7 @@ gst_poll_wait (GstPoll * set, GstClockTime timeout)
       if (!gst_poll_prepare_winsock_active_sets (set))
         goto winsock_error;
 #endif
-      g_mutex_unlock (set->lock);
+      GST_POLL_UNLOCK (set);
     }
 
     switch (mode) {
@@ -1446,7 +1450,7 @@ flushing:
 #ifdef G_OS_WIN32
 winsock_error:
   {
-    g_mutex_unlock (set->lock);
+    GST_POLL_UNLOCK (set);
     DEC_WAITING (set);
     return -1;
   }

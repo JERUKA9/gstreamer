@@ -487,24 +487,24 @@ G_STMT_START {                                                          \
  * This lock is used by the core.  It is taken while getting or setting
  * the state, during state changes, and while finalizing.
  */
-#define GST_STATE_GET_LOCK(elem)               (GST_ELEMENT_CAST(elem)->state_lock)
+#define GST_STATE_GET_LOCK(elem)               (&(GST_ELEMENT_CAST(elem)->state_lock))
 /**
  * GST_STATE_GET_COND:
  * @elem: a #GstElement
  *
  * Get the conditional used to signal the completion of a state change.
  */
-#define GST_STATE_GET_COND(elem)               (GST_ELEMENT_CAST(elem)->state_cond)
+#define GST_STATE_GET_COND(elem)               (&(GST_ELEMENT_CAST(elem)->state_cond))
 
-#define GST_STATE_LOCK(elem)                   g_static_rec_mutex_lock(GST_STATE_GET_LOCK(elem))
-#define GST_STATE_TRYLOCK(elem)                g_static_rec_mutex_trylock(GST_STATE_GET_LOCK(elem))
-#define GST_STATE_UNLOCK(elem)                 g_static_rec_mutex_unlock(GST_STATE_GET_LOCK(elem))
-#define GST_STATE_UNLOCK_FULL(elem)            g_static_rec_mutex_unlock_full(GST_STATE_GET_LOCK(elem))
-#define GST_STATE_LOCK_FULL(elem,t)            g_static_rec_mutex_lock_full(GST_STATE_GET_LOCK(elem), t)
+#define GST_STATE_LOCK(elem)                   g_rec_mutex_lock(GST_STATE_GET_LOCK(elem))
+#define GST_STATE_TRYLOCK(elem)                g_rec_mutex_trylock(GST_STATE_GET_LOCK(elem))
+#define GST_STATE_UNLOCK(elem)                 g_rec_mutex_unlock(GST_STATE_GET_LOCK(elem))
+#define GST_STATE_UNLOCK_FULL(elem)            g_rec_mutex_unlock_full(GST_STATE_GET_LOCK(elem))
+#define GST_STATE_LOCK_FULL(elem,t)            g_rec_mutex_lock_full(GST_STATE_GET_LOCK(elem), t)
 #define GST_STATE_WAIT(elem)                   g_cond_wait (GST_STATE_GET_COND (elem), \
                                                         GST_OBJECT_GET_LOCK (elem))
-#define GST_STATE_TIMED_WAIT(elem, timeval)    g_cond_timed_wait (GST_STATE_GET_COND (elem), \
-                                                        GST_OBJECT_GET_LOCK (elem), timeval)
+#define GST_STATE_WAIT_UNTIL(elem, end_time)    g_cond_wait_until (GST_STATE_GET_COND (elem), \
+                                                        GST_OBJECT_GET_LOCK (elem), end_time)
 #define GST_STATE_SIGNAL(elem)                 g_cond_signal (GST_STATE_GET_COND (elem));
 #define GST_STATE_BROADCAST(elem)              g_cond_broadcast (GST_STATE_GET_COND (elem));
 
@@ -542,10 +542,10 @@ struct _GstElement
   GstObject             object;
 
   /*< public >*/ /* with LOCK */
-  GStaticRecMutex      *state_lock;
+  GRecMutex             state_lock;
 
   /* element state */
-  GCond                *state_cond;
+  GCond                 state_cond;
   guint32               state_cookie;
   GstState              current_state;
   GstState              next_state;

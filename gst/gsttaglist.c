@@ -63,12 +63,12 @@ typedef struct
 }
 GstTagInfo;
 
-static GMutex *__tag_mutex;
+static GMutex __tag_mutex;
 
 static GHashTable *__tags;
 
-#define TAG_LOCK g_mutex_lock (__tag_mutex)
-#define TAG_UNLOCK g_mutex_unlock (__tag_mutex)
+#define TAG_LOCK g_mutex_lock (&__tag_mutex)
+#define TAG_UNLOCK g_mutex_unlock (&__tag_mutex)
 
 GType
 gst_tag_list_get_type (void)
@@ -91,7 +91,6 @@ gst_tag_list_get_type (void)
 void
 _gst_tag_initialize (void)
 {
-  __tag_mutex = g_mutex_new ();
   __tags = g_hash_table_new (g_direct_hash, g_direct_equal);
   gst_tag_register (GST_TAG_TITLE, GST_TAG_FLAG_META,
       G_TYPE_STRING,
@@ -1267,13 +1266,13 @@ gst_tag_list_get_ ## name ## _index (const GstTagList *list,            \
   return ret;                                                           \
 }
 
-/* FIXME 0.11: maybe get rid of _get_char*(), _get_uchar*(), _get_long*(),
+/* FIXME 0.11: maybe get rid of _get_schar*(), _get_uchar*(), _get_long*(),
  * _get_ulong*() and _get_pointer*()? - they are not really useful/common
  * enough to warrant convenience accessor functions */
 
 #define COPY_FUNC /**/
 /**
- * gst_tag_list_get_char:
+ * gst_tag_list_get_schar:
  * @list: a #GstTagList to get the tag from
  * @tag: tag to read out
  * @value: (out): location for the result
@@ -1285,7 +1284,7 @@ gst_tag_list_get_ ## name ## _index (const GstTagList *list,            \
  *              given list.
  */
 /**
- * gst_tag_list_get_char_index:
+ * gst_tag_list_get_schar_index:
  * @list: a #GstTagList to get the tag from
  * @tag: tag to read out
  * @index: number of entry to read out
@@ -1297,7 +1296,7 @@ gst_tag_list_get_ ## name ## _index (const GstTagList *list,            \
  * Returns: TRUE, if a value was copied, FALSE if the tag didn't exist in the
  *              given list.
  */
-TAG_MERGE_FUNCS (char, gchar, TRUE);
+TAG_MERGE_FUNCS (schar, gchar, TRUE);
 /**
  * gst_tag_list_get_uchar:
  * @list: a #GstTagList to get the tag from

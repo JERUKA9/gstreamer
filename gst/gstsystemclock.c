@@ -730,14 +730,13 @@ gst_system_clock_id_wait_jitter (GstClock * clock, GstClockEntry * entry,
 static gboolean
 gst_system_clock_start_async (GstSystemClock * clock)
 {
-  GError *error = NULL;
-
   if (G_LIKELY (clock->thread != NULL))
     return TRUE;                /* Thread already running. Nothing to do */
 
-  clock->thread = g_thread_create ((GThreadFunc) gst_system_clock_async_thread,
-      clock, TRUE, &error);
-  if (G_UNLIKELY (error))
+  clock->thread = g_thread_new ("gst_system_clock_async_thread",
+      (GThreadFunc) gst_system_clock_async_thread, clock);
+
+  if (G_UNLIKELY (clock->thread == NULL))
     goto no_thread;
 
   /* wait for it to spin up */
@@ -747,10 +746,6 @@ gst_system_clock_start_async (GstSystemClock * clock)
 
   /* ERRORS */
 no_thread:
-  {
-    g_warning ("could not create async clock thread: %s", error->message);
-    g_error_free (error);
-  }
   return FALSE;
 }
 

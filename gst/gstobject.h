@@ -88,7 +88,7 @@ typedef enum
  *
  * Acquire a reference to the mutex of this object.
  */
-#define GST_OBJECT_GET_LOCK(obj)               (GST_OBJECT_CAST(obj)->lock)
+#define GST_OBJECT_GET_LOCK(obj)               (&(GST_OBJECT_CAST(obj)->lock))
 /**
  * GST_OBJECT_LOCK:
  * @obj: a #GstObject to lock
@@ -199,7 +199,7 @@ struct _GstObject {
   gint           refcount;    /* unused (FIXME 0.11: remove) */
 
   /*< public >*/ /* with LOCK */
-  GMutex        *lock;        /* object LOCK */
+  GMutex         lock;        /* object LOCK */
   gchar         *name;        /* object name */
   gchar         *name_prefix; /* (un)used for debugging (FIXME 0.11: remove) */
   GstObject     *parent;      /* this object's parent, weak ref */
@@ -216,28 +216,28 @@ struct _GstObject {
  * This macro will return the class lock used to protect deep_notify signal
  * emission on thread-unsafe glib versions (glib < 2.8).
  */
-#define GST_CLASS_GET_LOCK(obj)         (GST_OBJECT_CLASS_CAST(obj)->lock)
+#define GST_CLASS_GET_LOCK(obj)         (&(GST_OBJECT_CLASS_CAST(obj)->lock))
 /**
  * GST_CLASS_LOCK:
  * @obj: a #GstObjectClass
  *
  * Lock the class.
  */
-#define GST_CLASS_LOCK(obj)             (g_static_rec_mutex_lock(GST_CLASS_GET_LOCK(obj)))
+#define GST_CLASS_LOCK(obj)             (g_rec_mutex_lock(GST_CLASS_GET_LOCK(obj)))
 /**
  * GST_CLASS_TRYLOCK:
  * @obj: a #GstObjectClass
  *
  * Try to lock the class, returns TRUE if class could be locked.
  */
-#define GST_CLASS_TRYLOCK(obj)          (g_static_rec_mutex_trylock(GST_CLASS_GET_LOCK(obj)))
+#define GST_CLASS_TRYLOCK(obj)          (g_rec_mutex_trylock(GST_CLASS_GET_LOCK(obj)))
 /**
  * GST_CLASS_UNLOCK:
  * @obj: a #GstObjectClass
  *
  * Unlock the class.
  */
-#define GST_CLASS_UNLOCK(obj)           (g_static_rec_mutex_unlock(GST_CLASS_GET_LOCK(obj)))
+#define GST_CLASS_UNLOCK(obj)           (g_rec_mutex_unlock(GST_CLASS_GET_LOCK(obj)))
 
 /**
  * GstObjectClass:
@@ -260,8 +260,7 @@ struct _GstObjectClass {
   const gchar	*path_string_separator;
   GObject	*signal_object;
 
-  /* FIXME-0.11: remove this, plus the above GST_CLASS_*_LOCK macros */
-  GStaticRecMutex *lock;
+  GRecMutex lock;
 
   /* signals */
   /* FIXME-0.11: remove, and pass NULL in g_signal_new(), we never used them */

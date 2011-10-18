@@ -262,10 +262,10 @@ gboolean     gst_tag_list_copy_value        (GValue           * dest,
                                              const gchar      * tag);
 
 /* simplifications (FIXME: do we want them?) */
-gboolean     gst_tag_list_get_char          (const GstTagList * list,
+gboolean     gst_tag_list_get_schar         (const GstTagList * list,
                                              const gchar      * tag,
                                              gchar            * value);
-gboolean     gst_tag_list_get_char_index    (const GstTagList * list,
+gboolean     gst_tag_list_get_schar_index   (const GstTagList * list,
                                              const gchar      * tag,
                                              guint              index,
                                              gchar            * value);

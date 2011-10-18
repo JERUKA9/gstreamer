@@ -98,7 +98,7 @@ static guint gst_bus_signals[LAST_SIGNAL] = { 0 };
 struct _GstBusPrivate
 {
   guint num_sync_message_emitters;
-  GCond *queue_cond;
+  GCond queue_cond;
   GSource *watch_id;
   GMainContext *main_context;
 };
@@ -185,10 +185,10 @@ static void
 gst_bus_init (GstBus * bus)
 {
   bus->queue = g_queue_new ();
-  bus->queue_lock = g_mutex_new ();
+  g_mutex_init (&bus->queue_lock);
 
   bus->priv = G_TYPE_INSTANCE_GET_PRIVATE (bus, GST_TYPE_BUS, GstBusPrivate);
-  bus->priv->queue_cond = g_cond_new ();
+  g_cond_init (&bus->priv->queue_cond);
 
   GST_DEBUG_OBJECT (bus, "created");
 }
@@ -201,7 +201,7 @@ gst_bus_dispose (GObject * object)
   if (bus->queue) {
     GstMessage *message;
 
-    g_mutex_lock (bus->queue_lock);
+    GST_BUS_QUEUE_LOCK (bus);
     do {
       message = g_queue_pop_head (bus->queue);
       if (message)
@@ -209,11 +209,8 @@ gst_bus_dispose (GObject * object)
     } while (message != NULL);
     g_queue_free (bus->queue);
     bus->queue = NULL;
-    g_mutex_unlock (bus->queue_lock);
-    g_mutex_free (bus->queue_lock);
-    bus->queue_lock = NULL;
-    g_cond_free (bus->priv->queue_cond);
-    bus->priv->queue_cond = NULL;
+    GST_BUS_QUEUE_UNLOCK (bus);
+    g_mutex_clear (&bus->queue_lock);
   }
 
   if (bus->priv->main_context) {
@@ -335,10 +332,10 @@ gst_bus_post (GstBus * bus, GstMessage * message)
     case GST_BUS_PASS:
       /* pass the message to the async queue, refcount passed in the queue */
       GST_DEBUG_OBJECT (bus, "[msg %p] pushing on async queue", message);
-      g_mutex_lock (bus->queue_lock);
+      GST_BUS_QUEUE_LOCK (bus);
       g_queue_push_tail (bus->queue, message);
-      g_cond_broadcast (bus->priv->queue_cond);
-      g_mutex_unlock (bus->queue_lock);
+      g_cond_broadcast (&bus->priv->queue_cond);
+      GST_BUS_QUEUE_UNLOCK (bus);
       GST_DEBUG_OBJECT (bus, "[msg %p] pushed on async queue", message);
 
       gst_bus_wakeup_main_context (bus);
@@ -348,8 +345,11 @@ gst_bus_post (GstBus * bus, GstMessage * message)
     {
       /* async delivery, we need a mutex and a cond to block
        * on */
-      GMutex *lock = g_mutex_new ();
-      GCond *cond = g_cond_new ();
+      GMutex *lock = (GMutex *) g_slice_new (GMutex);
+      GCond *cond = (GCond *) g_slice_new (GCond);
+
+      g_mutex_init (lock);
+      g_cond_init (cond);
 
       GST_MESSAGE_COND (message) = cond;
       GST_MESSAGE_GET_LOCK (message) = lock;
@@ -360,10 +360,10 @@ gst_bus_post (GstBus * bus, GstMessage * message)
        * queue. When the message is handled by the app and destroyed,
        * the cond will be signalled and we can continue */
       g_mutex_lock (lock);
-      g_mutex_lock (bus->queue_lock);
+      GST_BUS_QUEUE_LOCK (bus);
       g_queue_push_tail (bus->queue, message);
-      g_cond_broadcast (bus->priv->queue_cond);
-      g_mutex_unlock (bus->queue_lock);
+      g_cond_broadcast (&bus->priv->queue_cond);
+      GST_BUS_QUEUE_UNLOCK (bus);
 
       gst_bus_wakeup_main_context (bus);
 
@@ -373,8 +373,8 @@ gst_bus_post (GstBus * bus, GstMessage * message)
 
       GST_DEBUG_OBJECT (bus, "[msg %p] delivered asynchronously", message);
 
-      g_mutex_free (lock);
-      g_cond_free (cond);
+      g_slice_free (GMutex, lock);
+      g_slice_free (GCond, cond);
       break;
     }
     default:
@@ -413,10 +413,10 @@ gst_bus_have_pending (GstBus * bus)
 
   g_return_val_if_fail (GST_IS_BUS (bus), FALSE);
 
-  g_mutex_lock (bus->queue_lock);
+  GST_BUS_QUEUE_LOCK (bus);
   /* see if there is a message on the bus */
   result = !g_queue_is_empty (bus->queue);
-  g_mutex_unlock (bus->queue_lock);
+  GST_BUS_QUEUE_UNLOCK (bus);
 
   return result;
 }
@@ -482,13 +482,13 @@ gst_bus_timed_pop_filtered (GstBus * bus, GstClockTime timeout,
     GstMessageType types)
 {
   GstMessage *message;
-  GTimeVal *timeval, abstimeout;
+  gint64 end_time;
   gboolean first_round = TRUE;
 
   g_return_val_if_fail (GST_IS_BUS (bus), NULL);
   g_return_val_if_fail (types != 0, NULL);
 
-  g_mutex_lock (bus->queue_lock);
+  GST_BUS_QUEUE_LOCK (bus);
 
   while (TRUE) {
     GST_LOG_OBJECT (bus, "have %d messages", g_queue_get_length (bus->queue));
@@ -513,26 +513,21 @@ gst_bus_timed_pop_filtered (GstBus * bus, GstClockTime timeout,
 
     if (timeout == GST_CLOCK_TIME_NONE) {
       /* wait forever */
-      timeval = NULL;
+      end_time = 0;
+      g_cond_wait (&bus->priv->queue_cond, &bus->queue_lock);
+
     } else if (first_round) {
-      glong add = timeout / 1000;
-
-      if (add == 0)
-        /* no need to wait */
-        break;
-
       /* make timeout absolute */
-      g_get_current_time (&abstimeout);
-      g_time_val_add (&abstimeout, add);
-      timeval = &abstimeout;
+      end_time = g_get_monotonic_time () + timeout;
       first_round = FALSE;
-      GST_DEBUG_OBJECT (bus, "blocking for message, timeout %ld", add);
+      GST_DEBUG_OBJECT (bus, "blocking for message, timeout %ld",
+          timeout / 1000);
     } else {
       /* calculated the absolute end time already, no need to do it again */
       GST_DEBUG_OBJECT (bus, "blocking for message, again");
-      timeval = &abstimeout;    /* fool compiler */
     }
-    if (!g_cond_timed_wait (bus->priv->queue_cond, bus->queue_lock, timeval)) {
+
+    if (!g_cond_wait_until (&bus->priv->queue_cond, &bus->queue_lock, end_time)) {
       GST_INFO_OBJECT (bus, "timed out, breaking loop");
       break;
     } else {
@@ -542,7 +537,7 @@ gst_bus_timed_pop_filtered (GstBus * bus, GstClockTime timeout,
 
 beach:
 
-  g_mutex_unlock (bus->queue_lock);
+  GST_BUS_QUEUE_UNLOCK (bus);
 
   return message;
 }
@@ -644,11 +639,11 @@ gst_bus_peek (GstBus * bus)
 
   g_return_val_if_fail (GST_IS_BUS (bus), NULL);
 
-  g_mutex_lock (bus->queue_lock);
+  GST_BUS_QUEUE_LOCK (bus);
   message = g_queue_peek_head (bus->queue);
   if (message)
     gst_message_ref (message);
-  g_mutex_unlock (bus->queue_lock);
+  GST_BUS_QUEUE_UNLOCK (bus);
 
   GST_DEBUG_OBJECT (bus, "peek on bus, got message %p", message);
 

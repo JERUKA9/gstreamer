@@ -105,6 +105,9 @@ typedef GstBusSyncReply (*GstBusSyncHandler)    (GstBus * bus, GstMessage * mess
  */
 typedef gboolean        (*GstBusFunc)           (GstBus * bus, GstMessage * message, gpointer data);
 
+#define GST_BUS_QUEUE_LOCK(bus) g_mutex_lock (&(GST_BUS_CAST (bus)->queue_lock))
+#define GST_BUS_QUEUE_UNLOCK(bus) g_mutex_unlock (&(GST_BUS_CAST (bus)->queue_lock))
+
 /**
  * GstBus:
  *
@@ -116,7 +119,7 @@ struct _GstBus
 
   /*< private >*/
   GQueue           *queue;
-  GMutex           *queue_lock;
+  GMutex            queue_lock;
 
   GstBusSyncHandler sync_handler;
   gpointer          sync_handler_data;

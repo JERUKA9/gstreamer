@@ -57,14 +57,14 @@
 #define GST_PROXY_PAD_TARGET(pad)       (GST_PROXY_PAD_PRIVATE (pad)->target)
 #define GST_PROXY_PAD_INTERNAL(pad)     (GST_PROXY_PAD_PRIVATE (pad)->internal)
 #define GST_PROXY_PAD_RETARGET(pad)     (GST_PROXY_PAD_PRIVATE (pad)->retarget)
-#define GST_PROXY_GET_LOCK(pad) (GST_PROXY_PAD_PRIVATE (pad)->proxy_lock)
+#define GST_PROXY_GET_LOCK(pad) (&(GST_PROXY_PAD_PRIVATE (pad)->proxy_lock))
 #define GST_PROXY_LOCK(pad)     (g_mutex_lock (GST_PROXY_GET_LOCK (pad)))
 #define GST_PROXY_UNLOCK(pad)   (g_mutex_unlock (GST_PROXY_GET_LOCK (pad)))
 
 struct _GstProxyPadPrivate
 {
   /* with PROXY_LOCK */
-  GMutex *proxy_lock;
+  GMutex proxy_lock;
   GstPad *target;
   GstPad *internal;
   gboolean retarget;
@@ -686,8 +686,7 @@ gst_proxy_pad_finalize (GObject * object)
 {
   GstProxyPad *pad = GST_PROXY_PAD (object);
 
-  g_mutex_free (GST_PROXY_GET_LOCK (pad));
-  GST_PROXY_GET_LOCK (pad) = NULL;
+  g_mutex_clear (GST_PROXY_GET_LOCK (pad));
 
   G_OBJECT_CLASS (gst_proxy_pad_parent_class)->finalize (object);
 }
@@ -699,7 +698,7 @@ gst_proxy_pad_init (GstProxyPad * ppad)
 
   GST_PROXY_PAD_PRIVATE (ppad) = G_TYPE_INSTANCE_GET_PRIVATE (ppad,
       GST_TYPE_PROXY_PAD, GstProxyPadPrivate);
-  GST_PROXY_GET_LOCK (pad) = g_mutex_new ();
+  g_mutex_init (GST_PROXY_GET_LOCK (pad));
 
   gst_pad_set_query_type_function (pad, gst_proxy_pad_query_type_default);
   gst_pad_set_event_function (pad, gst_proxy_pad_event_default);

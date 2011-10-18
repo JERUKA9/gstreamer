@@ -71,9 +71,6 @@
  *       N_("Output tags (also known as metadata)"), NULL},
  *   {NULL}
  *  };
- *  // must initialise the threading system before using any other GLib funtion
- *  if (!g_thread_supported ())
- *    g_thread_init (NULL);
  *  ctx = g_option_context_new ("[ADDITIONAL ARGUMENTS]");
  *  g_option_context_add_main_entries (ctx, options, GETTEXT_PACKAGE);
  *  g_option_context_add_group (ctx, gst_init_get_option_group ());
@@ -362,25 +359,25 @@ gst_init_get_option_group (void)
 
   /* Since GLib 2.23.2 calling g_thread_init() 'late' is allowed and is
    * automatically done as part of g_type_init() */
-  if (glib_check_version (2, 23, 3)) {
-    /* The GLib threading system must be initialised before calling any other
-     * GLib function according to the documentation; if the application hasn't
-     * called gst_init() yet or initialised the threading system otherwise, we
-     * better issue a warning here (since chances are high that the application
-     * has already called other GLib functions such as g_option_context_new() */
-    if (!g_thread_get_initialized ()) {
-      g_warning ("The GStreamer function gst_init_get_option_group() was\n"
-          "\tcalled, but the GLib threading system has not been initialised\n"
-          "\tyet, something that must happen before any other GLib function\n"
-          "\tis called. The application needs to be fixed so that it calls\n"
-          "\t   if (!g_thread_get_initialized ()) g_thread_init(NULL);\n"
-          "\tas very first thing in its main() function. Please file a bug\n"
-          "\tagainst this application.");
-      g_thread_init (NULL);
-    }
-  } else {
-    /* GLib >= 2.23.2 */
+
+  /* GLib 2.31.0 deprecated g_thread_init(). */
+#if GLIB_CHECK_VERSION(2, 23, 2) && ! GLIB_CHECK_VERSION (2, 31, 0)
+  /* The GLib threading system must be initialised before calling any other
+   * GLib function according to the documentation; if the application hasn't
+   * called gst_init() yet or initialised the threading system otherwise, we
+   * better issue a warning here (since chances are high that the application
+   * has already called other GLib functions such as g_option_context_new() */
+  if (!g_thread_get_initialized ()) {
+    g_warning ("The GStreamer function gst_init_get_option_group() was\n"
+        "\tcalled, but the GLib threading system has not been initialised\n"
+        "\tyet, something that must happen before any other GLib function\n"
+        "\tis called. The application needs to be fixed so that it calls\n"
+        "\t   if (!g_thread_get_initialized ()) g_thread_init(NULL);\n"
+        "\tas very first thing in its main() function. Please file a bug\n"
+        "\tagainst this application.");
+    g_thread_init (NULL);
   }
+#endif
 
   group = g_option_group_new ("gst", _("GStreamer Options"),
       _("Show GStreamer Options"), NULL, NULL);
@@ -424,8 +421,10 @@ gst_init_check (int *argc, char **argv[], GError ** err)
 #endif
   gboolean res;
 
+#if GLIB_CHECK_VERSION(2, 32, 2)
   if (!g_thread_get_initialized ())
     g_thread_init (NULL);
+#endif
 
   if (gst_initialized) {
     GST_DEBUG ("already initialized gst");
@@ -574,8 +573,10 @@ init_pre (GOptionContext * context, GOptionGroup * group, gpointer data,
 
   g_type_init ();
 
+#if GLIB_CHECK_VERSION(2, 32, 2)
   /* we need threading to be enabled right here */
   g_assert (g_thread_get_initialized ());
+#endif
 
   _gst_debug_init ();
 

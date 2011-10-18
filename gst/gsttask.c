@@ -38,7 +38,7 @@
  * might sometimes be needed to create a #GstTask manually if it is not related to
  * a #GstPad.
  *
- * Before the #GstTask can be run, it needs a #GStaticRecMutex that can be set with
+ * Before the #GstTask can be run, it needs a #GRecMutex that can be set with
  * gst_task_set_lock().
  *
  * The task can be started, paused and stopped with gst_task_start(), gst_task_pause()
@@ -74,6 +74,7 @@
 #include "gsttask.h"
 
 #include <stdio.h>
+#include <glib.h>
 
 #ifdef HAVE_SYS_PRCTL_H
 #include <sys/prctl.h>
@@ -94,9 +95,6 @@ struct _GstTaskPrivate
   GstTaskThreadCallbacks thr_callbacks;
   gpointer thr_user_data;
   GDestroyNotify thr_notify;
-
-  gboolean prio_set;
-  GThreadPriority priority;
 
   /* configured pool */
   GstTaskPool *pool;
@@ -186,10 +184,8 @@ gst_task_init (GstTask * task)
   task->priv = GST_TASK_GET_PRIVATE (task);
   task->running = FALSE;
   task->abidata.ABI.thread = NULL;
-  task->lock = NULL;
-  task->cond = g_cond_new ();
+  g_cond_init (&task->cond);
   SET_TASK_STATE (task, GST_TASK_STOPPED);
-  task->priv->prio_set = FALSE;
 
   /* use the default klass pool for this task, users can
    * override this later */
@@ -215,8 +211,7 @@ gst_task_finalize (GObject * object)
 
   /* task thread cannot be running here since it holds a ref
    * to the task so that the finalize could not have happened */
-  g_cond_free (task->cond);
-  task->cond = NULL;
+  g_cond_clear (&task->cond);
 
   G_OBJECT_CLASS (gst_task_parent_class)->finalize (object);
 }
@@ -255,7 +250,7 @@ gst_task_configure_name (GstTask * task)
 static void
 gst_task_func (GstTask * task)
 {
-  GStaticRecMutex *lock;
+  GRecMutex *lock;
   GThread *tself;
   GstTaskPrivate *priv;
 
@@ -275,9 +270,6 @@ gst_task_func (GstTask * task)
   if (G_UNLIKELY (lock == NULL))
     goto no_lock;
   task->abidata.ABI.thread = tself;
-  /* only update the priority when it was changed */
-  if (priv->prio_set)
-    g_thread_set_priority (tself, priv->priority);
   GST_OBJECT_UNLOCK (task);
 
   /* fire the enter_thread callback when we need to */
@@ -285,7 +277,9 @@ gst_task_func (GstTask * task)
     priv->thr_callbacks.enter_thread (task, tself, priv->thr_user_data);
 
   /* locking order is TASK_LOCK, LOCK */
-  g_static_rec_mutex_lock (lock);
+  g_rec_mutex_lock (lock);
+  g_atomic_int_inc (&task->lock_count);
+
   /* configure the thread name now */
   gst_task_configure_name (task);
 
@@ -293,18 +287,23 @@ gst_task_func (GstTask * task)
     if (G_UNLIKELY (GET_TASK_STATE (task) == GST_TASK_PAUSED)) {
       GST_OBJECT_LOCK (task);
       while (G_UNLIKELY (GST_TASK_STATE (task) == GST_TASK_PAUSED)) {
-        gint t;
+        volatile gint t;
 
-        t = g_static_rec_mutex_unlock_full (lock);
+        t = task->lock_count;
         if (t <= 0) {
           g_warning ("wrong STREAM_LOCK count %d", t);
+        } else {
+          while (t-- > 0)
+            g_rec_mutex_unlock (lock);
         }
         GST_TASK_SIGNAL (task);
         GST_TASK_WAIT (task);
         GST_OBJECT_UNLOCK (task);
         /* locking order.. */
-        if (t > 0)
-          g_static_rec_mutex_lock_full (lock, t);
+
+        t = task->lock_count;
+        while (t-- > 0)
+          g_rec_mutex_lock (lock);
 
         GST_OBJECT_LOCK (task);
         if (G_UNLIKELY (GET_TASK_STATE (task) == GST_TASK_STOPPED)) {
@@ -318,7 +317,8 @@ gst_task_func (GstTask * task)
     task->func (task->data);
   }
 done:
-  g_static_rec_mutex_unlock (lock);
+  g_rec_mutex_unlock (lock);
+  g_atomic_int_dec_and_test (&task->lock_count);
 
   GST_OBJECT_LOCK (task);
   task->abidata.ABI.thread = NULL;
@@ -330,10 +330,6 @@ exit:
     GST_OBJECT_UNLOCK (task);
     priv->thr_callbacks.leave_thread (task, tself, priv->thr_user_data);
     GST_OBJECT_LOCK (task);
-  } else {
-    /* restore normal priority when releasing back into the pool, we will not
-     * touch the priority when a custom callback has been installed. */
-    g_thread_set_priority (tself, G_THREAD_PRIORITY_NORMAL);
   }
   /* now we allow messing with the lock again by setting the running flag to
    * FALSE. Together with the SIGNAL this is the sign for the _join() to
@@ -391,7 +387,7 @@ gst_task_cleanup_all (void)
  * This function will not yet create and start a thread. Use gst_task_start() or
  * gst_task_pause() to create and start the GThread.
  *
- * Before the task can be used, a #GStaticRecMutex must be configured using the
+ * Before the task can be used, a #GRecMutex must be configured using the
  * gst_task_set_lock() function. This lock will always be acquired while
  * @func is called.
  *
@@ -416,7 +412,7 @@ gst_task_create (GstTaskFunction func, gpointer data)
 /**
  * gst_task_set_lock:
  * @task: The #GstTask to use
- * @mutex: The #GMutex to use
+ * @mutex: The #GRecMutex to use
  *
  * Set the mutex used by the task. The mutex will be acquired before
  * calling the #GstTaskFunction.
@@ -427,7 +423,7 @@ gst_task_create (GstTaskFunction func, gpointer data)
  * MT safe.
  */
 void
-gst_task_set_lock (GstTask * task, GStaticRecMutex * mutex)
+gst_task_set_lock (GstTask * task, GRecMutex * mutex)
 {
   GST_OBJECT_LOCK (task);
   if (G_UNLIKELY (task->running))
@@ -443,41 +439,6 @@ is_running:
     GST_OBJECT_UNLOCK (task);
     g_warning ("cannot call set_lock on a running task");
   }
-}
-
-/**
- * gst_task_set_priority:
- * @task: a #GstTask
- * @priority: a new priority for @task
- *
- * Changes the priority of @task to @priority.
- *
- * Note: try not to depend on task priorities.
- *
- * MT safe.
- *
- * Since: 0.10.24
- */
-void
-gst_task_set_priority (GstTask * task, GThreadPriority priority)
-{
-  GstTaskPrivate *priv;
-  GThread *thread;
-
-  g_return_if_fail (GST_IS_TASK (task));
-
-  priv = task->priv;
-
-  GST_OBJECT_LOCK (task);
-  priv->prio_set = TRUE;
-  priv->priority = priority;
-  thread = task->abidata.ABI.thread;
-  if (thread != NULL) {
-    /* if this task already has a thread, we can configure the priority right
-     * away, else we do that when we assign a thread to the task. */
-    g_thread_set_priority (thread, priority);
-  }
-  GST_OBJECT_UNLOCK (task);
 }
 
 /**

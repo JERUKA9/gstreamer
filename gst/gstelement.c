@@ -311,10 +311,7 @@ gst_element_init (GstElement * element)
   GST_STATE_PENDING (element) = GST_STATE_VOID_PENDING;
   GST_STATE_RETURN (element) = GST_STATE_CHANGE_SUCCESS;
 
-  /* FIXME 0.11: Store this directly in the instance struct */
-  element->state_lock = g_slice_new (GStaticRecMutex);
-  g_static_rec_mutex_init (element->state_lock);
-  element->state_cond = g_cond_new ();
+  g_cond_init (&element->state_cond);
 }
 
 /**
@@ -2138,34 +2135,34 @@ gst_element_get_state_func (GstElement * element,
 
   old_pending = GST_STATE_PENDING (element);
   if (old_pending != GST_STATE_VOID_PENDING) {
-    GTimeVal *timeval, abstimeout;
     guint32 cookie;
-
-    if (timeout != GST_CLOCK_TIME_NONE) {
-      glong add = timeout / 1000;
-
-      if (add == 0)
-        goto done;
-
-      /* make timeout absolute */
-      g_get_current_time (&abstimeout);
-      g_time_val_add (&abstimeout, add);
-      timeval = &abstimeout;
-    } else {
-      timeval = NULL;
-    }
+    gboolean timeout_triggered;
     /* get cookie to detect state changes during waiting */
     cookie = element->state_cookie;
+
+    timeout_triggered = FALSE;
 
     GST_CAT_INFO_OBJECT (GST_CAT_STATES, element,
         "waiting for element to commit state");
 
     /* we have a pending state change, wait for it to complete */
-    if (!GST_STATE_TIMED_WAIT (element, timeval)) {
-      GST_CAT_INFO_OBJECT (GST_CAT_STATES, element, "timed out");
-      /* timeout triggered */
-      ret = GST_STATE_CHANGE_ASYNC;
+
+    if (timeout != GST_CLOCK_TIME_NONE) {
+      gint64 end_time;
+
+      end_time = g_get_monotonic_time () + timeout;
+
+      if (!GST_STATE_WAIT_UNTIL (element, end_time)) {
+        GST_CAT_INFO_OBJECT (GST_CAT_STATES, element, "timed out");
+        /* timeout triggered */
+        ret = GST_STATE_CHANGE_ASYNC;
+        timeout_triggered = TRUE;
+      }
     } else {
+      GST_STATE_WAIT (element);
+    }
+
+    if (!timeout_triggered) {
       if (cookie != element->state_cookie)
         goto interrupted;
 
@@ -2178,6 +2175,7 @@ gst_element_get_state_func (GstElement * element,
         ret = GST_STATE_CHANGE_FAILURE;
       }
     }
+
     /* if nothing is pending anymore we can return SUCCESS */
     if (GST_STATE_PENDING (element) == GST_STATE_VOID_PENDING) {
       GST_CAT_LOG_OBJECT (GST_CAT_STATES, element, "nothing pending");
@@ -3092,13 +3090,9 @@ gst_element_finalize (GObject * object)
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "finalize");
 
   GST_STATE_LOCK (element);
-  if (element->state_cond)
-    g_cond_free (element->state_cond);
-  element->state_cond = NULL;
+  g_cond_clear (&element->state_cond);
   GST_STATE_UNLOCK (element);
-  g_static_rec_mutex_free (element->state_lock);
-  g_slice_free (GStaticRecMutex, element->state_lock);
-  element->state_lock = NULL;
+  g_rec_mutex_clear (&element->state_lock);
 
   GST_CAT_INFO_OBJECT (GST_CAT_REFCOUNTING, element, "finalize parent");
 

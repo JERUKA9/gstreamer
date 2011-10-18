@@ -37,8 +37,8 @@ G_BEGIN_DECLS
 #define GST_CLOCK_GET_CLASS(clock)	(G_TYPE_INSTANCE_GET_CLASS ((clock), GST_TYPE_CLOCK, GstClockClass))
 #define GST_CLOCK_CAST(clock)		((GstClock*)(clock))
 
-#define GST_CLOCK_SLAVE_LOCK(clock)	g_mutex_lock (GST_CLOCK_CAST (clock)->slave_lock)
-#define GST_CLOCK_SLAVE_UNLOCK(clock)	g_mutex_unlock (GST_CLOCK_CAST (clock)->slave_lock)
+#define GST_CLOCK_SLAVE_LOCK(clock)	g_mutex_lock (&(GST_CLOCK_CAST (clock)->slave_lock))
+#define GST_CLOCK_SLAVE_UNLOCK(clock)	g_mutex_unlock (&(GST_CLOCK_CAST (clock)->slave_lock))
 
 /**
  * GstClockTime:
@@ -400,7 +400,7 @@ typedef enum {
  * Gets the #GCond that gets signalled when the entries of the clock
  * changed.
  */
-#define GST_CLOCK_COND(clock)            (GST_CLOCK_CAST(clock)->entries_changed)
+#define GST_CLOCK_COND(clock)            (&(GST_CLOCK_CAST(clock)->entries_changed))
 /**
  * GST_CLOCK_WAIT:
  * @clock: the clock to wait on
@@ -434,7 +434,7 @@ typedef enum {
 struct _GstClock {
   GstObject	 object;
 
-  GMutex	*slave_lock; /* order: SLAVE_LOCK, OBJECT_LOCK */
+  GMutex	 slave_lock; /* order: SLAVE_LOCK, OBJECT_LOCK */
 
   /*< protected >*/ /* with LOCK */
   GstClockTime	 internal_calibration;
@@ -443,7 +443,7 @@ struct _GstClock {
   GstClockTime	 rate_denominator;
   GstClockTime	 last_time;
   GList		*entries;
-  GCond		*entries_changed;
+  GCond		 entries_changed;
 
   /*< private >*/ /* with LOCK */
   GstClockTime	 resolution;
